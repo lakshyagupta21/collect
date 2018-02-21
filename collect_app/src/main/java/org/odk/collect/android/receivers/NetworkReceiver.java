@@ -147,7 +147,7 @@ public class NetworkReceiver extends BroadcastReceiver implements InstanceUpload
                 Uri u = Uri.parse(url);
                 WebUtils.addCredentials(storedUsername, storedPassword, u.getHost());
 
-                instanceServerUploader = new InstanceServerUploader();
+                instanceServerUploader = new InstanceServerUploader(null);
                 instanceServerUploader.setUploaderListener(this);
 
                 instanceServerUploader.execute(toSendArray);

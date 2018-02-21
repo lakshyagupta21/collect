@@ -16,12 +16,25 @@ package org.odk.collect.android.activities;
 
 import android.app.Dialog;
 import android.app.ProgressDialog;
+import android.bluetooth.BluetoothAdapter;
+import android.bluetooth.BluetoothDevice;
+import android.bluetooth.BluetoothSocket;
+import android.content.BroadcastReceiver;
+import android.content.Context;
 import android.content.DialogInterface;
 import android.content.Intent;
+import android.content.IntentFilter;
 import android.database.Cursor;
 import android.database.SQLException;
 import android.net.Uri;
 import android.os.Bundle;
+import android.util.Log;
+import android.view.View;
+import android.widget.AdapterView;
+import android.widget.ArrayAdapter;
+import android.widget.Button;
+import android.widget.ListView;
+import android.widget.Toast;
 
 import org.odk.collect.android.R;
 import org.odk.collect.android.application.Collect;
@@ -34,11 +47,13 @@ import org.odk.collect.android.utilities.ApplicationConstants;
 import org.odk.collect.android.utilities.ArrayUtils;
 import org.odk.collect.android.utilities.AuthDialogUtility;
 
+import java.io.IOException;
 import java.util.ArrayList;
 import java.util.Collections;
 import java.util.HashMap;
 import java.util.Iterator;
 import java.util.Set;
+import java.util.UUID;
 
 import timber.log.Timber;
 
@@ -48,7 +63,7 @@ import timber.log.Timber;
  * @author Carl Hartung (carlhartung@gmail.com)
  */
 public class InstanceUploaderActivity extends CollectAbstractActivity implements InstanceUploaderListener,
-        AuthDialogUtility.AuthDialogUtilityResultListener {
+        AuthDialogUtility.AuthDialogUtilityResultListener, View.OnClickListener {
     private static final int PROGRESS_DIALOG = 1;
     private static final int AUTH_DIALOG = 2;
 
@@ -69,9 +84,24 @@ public class InstanceUploaderActivity extends CollectAbstractActivity implements
     private HashMap<String, String> uploadedInstances;
     private String url;
 
+    ListView detectedDevices;
+    Button buttonSearch,buttonOn;
+    ArrayAdapter<String> detectedAdapter;
+    BluetoothDevice bdDevice;
+    BluetoothAdapter bluetoothAdapter = null;
+    ArrayList<BluetoothDevice> arrayListBluetoothDevices = null;
+    boolean isBluetoothOn;
+    private static final String TAG = "MainActivity";
+    private final static UUID uuid = UUID.fromString("2cc9ec17-8fd3-4e10-a28a-4be8383a9737");
+    String path ;
+
+
+
     @Override
     protected void onCreate(Bundle savedInstanceState) {
         super.onCreate(savedInstanceState);
+        setContentView(R.layout.connect_bluetooth);
+
         Timber.i("onCreate: %s", ((savedInstanceState == null) ? "creating" : "re-initializing"));
 
         alertMsg = getString(R.string.please_wait);
@@ -112,15 +142,66 @@ public class InstanceUploaderActivity extends CollectAbstractActivity implements
 
         // get the task if we've changed orientations. If it's null it's a new upload.
         instanceServerUploader = (InstanceServerUploader) getLastCustomNonConfigurationInstance();
-        if (instanceServerUploader == null) {
-            // setup dialog and upload task
-            showDialog(PROGRESS_DIALOG);
-            instanceServerUploader = new InstanceServerUploader();
+//        if (instanceServerUploader == null) {
+//            // setup dialog and upload task
+//            showDialog(PROGRESS_DIALOG);
+//            instanceServerUploader = new InstanceServerUploader();
+//
+//            // register this activity with the new uploader task
+//            instanceServerUploader.setUploaderListener(this);
+//            instanceServerUploader.execute(instancesToSend);
+//        }
 
-            // register this activity with the new uploader task
-            instanceServerUploader.setUploaderListener(this);
-            instanceServerUploader.execute(instancesToSend);
+
+
+
+
+        detectedDevices = (ListView) findViewById(R.id.detectedList);
+        buttonSearch = (Button) findViewById(R.id.search);
+        buttonOn = (Button) findViewById(R.id.bluetoothToggle);
+
+        buttonOn.setOnClickListener(this);
+        buttonSearch.setOnClickListener(this);
+
+
+        detectedDevices.setOnItemClickListener(new AdapterView.OnItemClickListener() {
+            @Override
+            public void onItemClick(AdapterView<?> adapterView, View view, int i, long l) {
+                bdDevice = arrayListBluetoothDevices.get(i);
+                Set<BluetoothDevice> pairedDevice = bluetoothAdapter.getBondedDevices();
+                if(pairedDevice.size()>0)
+                {
+                    for(BluetoothDevice device : pairedDevice)
+                    {
+                        if(device.equals(bdDevice)) {
+                            Log.d(TAG,"Already Paired");
+                            BluetoothDevice bluetoothDevice = bdDevice;
+                            // Initiate a connection request in a separate thread
+                            ConnectingThread t = new ConnectingThread(bluetoothDevice);
+                            t.start();
+                            break;
+                        }
+                    }
+                }
+            }
+        });
+
+        bluetoothAdapter = BluetoothAdapter.getDefaultAdapter();
+        arrayListBluetoothDevices = new ArrayList<BluetoothDevice>();
+        detectedAdapter = new ArrayAdapter<String>(this, android.R.layout.simple_list_item_single_choice);
+        detectedDevices.setAdapter(detectedAdapter);
+        detectedAdapter.notifyDataSetChanged();
+        if (!bluetoothAdapter.isEnabled()) {
+            buttonOn.setText("Bluetooth On");
+        } else {
+            buttonOn.setText("Bluetooth Off");
         }
+
+
+
+
+
+
     }
 
     @Override
@@ -256,7 +337,7 @@ public class InstanceUploaderActivity extends CollectAbstractActivity implements
     @Override
     public void progressUpdate(int progress, int total) {
         alertMsg = getString(R.string.sending_items, String.valueOf(progress), String.valueOf(total));
-        progressDialog.setMessage(alertMsg);
+//        progressDialog.setMessage(alertMsg);
     }
 
     @Override
@@ -347,16 +428,158 @@ public class InstanceUploaderActivity extends CollectAbstractActivity implements
 
     @Override
     public void updatedCredentials() {
-        showDialog(PROGRESS_DIALOG);
-        instanceServerUploader = new InstanceServerUploader();
-
-        // register this activity with the new uploader task
-        instanceServerUploader.setUploaderListener(this);
-        instanceServerUploader.execute(instancesToSend);
+//        showDialog(PROGRESS_DIALOG);
+//        instanceServerUploader = new InstanceServerUploader();
+//
+//        // register this activity with the new uploader task
+//        instanceServerUploader.setUploaderListener(this);
+//        instanceServerUploader.execute(instancesToSend);
     }
 
     @Override
     public void cancelledUpdatingCredentials() {
         finish();
+    }
+
+
+
+
+
+
+    private void onBluetooth() {
+        if(!bluetoothAdapter.isEnabled()){
+            bluetoothAdapter.enable();
+        }
+    }
+    private void offBluetooth() {
+        if(bluetoothAdapter.isEnabled()){
+            bluetoothAdapter.disable();
+        }
+    }
+
+    private void startSearch() {
+        Log.d(TAG, "Search Started");
+        IntentFilter intentFilter = new IntentFilter();
+        intentFilter.addAction(BluetoothAdapter.ACTION_DISCOVERY_STARTED);
+        intentFilter.addAction(BluetoothAdapter.ACTION_DISCOVERY_FINISHED);
+        intentFilter.addAction(BluetoothDevice.ACTION_FOUND);
+
+        registerReceiver(myReceiver, intentFilter);
+        bluetoothAdapter.startDiscovery();
+    }
+
+    @Override
+    public void onClick(View view) {
+        switch (view.getId()) {
+            case R.id.bluetoothToggle:
+                if (isBluetoothOn) {
+                    offBluetooth();
+                    buttonOn.setText("Bluetooth On");
+                }
+                else {
+                    onBluetooth();
+                    buttonOn.setText("Bluetooth Off");
+                }
+                break;
+            case R.id.search:
+                arrayListBluetoothDevices.clear();
+                detectedAdapter.notifyDataSetChanged();
+                startSearch();
+                break;
+        }
+    }
+    private BroadcastReceiver myReceiver = new BroadcastReceiver() {
+        @Override
+        public void onReceive(Context context, Intent intent) {
+            String action = intent.getAction();
+            if(BluetoothDevice.ACTION_FOUND.equals(action)){
+                BluetoothDevice device = intent.getParcelableExtra(BluetoothDevice.EXTRA_DEVICE);
+                boolean flag = true;    // flag to indicate that particular device is already in the arlist or not
+                for(int i = 0; i<arrayListBluetoothDevices.size();i++)
+                {
+                    if(device.getAddress().equals(arrayListBluetoothDevices.get(i).getAddress()))
+                    {
+                        flag = false;
+                    }
+                }
+                if(flag == true)
+                {
+                    detectedAdapter.add(device.getName()+"\n"+device.getAddress());
+                    arrayListBluetoothDevices.add(device);
+                    detectedAdapter.notifyDataSetChanged();
+                }
+            }else if(BluetoothAdapter.ACTION_DISCOVERY_STARTED.equals(action)){
+
+            }else if(BluetoothAdapter.ACTION_DISCOVERY_FINISHED.equals(action)){
+
+            }
+        }
+    };
+
+
+
+    private class ConnectingThread extends Thread {
+        private final BluetoothSocket bluetoothSocket;
+        private final BluetoothDevice bluetoothDevice;
+
+        public ConnectingThread(BluetoothDevice device) {
+
+            BluetoothSocket temp = null;
+            bluetoothDevice = device;
+
+            // Get a BluetoothSocket to connect with the given BluetoothDevice
+            try {
+                temp = bluetoothDevice.createRfcommSocketToServiceRecord(uuid);
+            } catch (IOException e) {
+                e.printStackTrace();
+            }
+            bluetoothSocket = temp;
+        }
+
+        public void run() {
+            // Cancel any discovery as it will slow down the connection
+            bluetoothAdapter.cancelDiscovery();
+
+            try {
+                // This will block until it succeeds in connecting to the device
+                // through the bluetoothSocket or throws an exception
+                bluetoothSocket.connect();
+                runOnUiThread(new Runnable() {
+                    public void run() {
+                        Toast.makeText(getApplicationContext(), "Connection Established",
+                                Toast.LENGTH_SHORT).show();
+                    }
+                });
+                if (instanceServerUploader == null) {
+                    // setup dialog and upload task
+                    instanceServerUploader = new InstanceServerUploader(bluetoothSocket);
+
+                    // register this activity with the new uploader task
+                    instanceServerUploader.setUploaderListener(InstanceUploaderActivity.this);
+                    instanceServerUploader.execute(instancesToSend);
+                }
+            } catch (IOException connectException) {
+                connectException.printStackTrace();
+                try {
+                    bluetoothSocket.close();
+                } catch (IOException e) {
+                    e.printStackTrace();
+                }
+            }
+
+            // Code to manage the connection in a separate thread
+        /*
+            manageBluetoothConnection(bluetoothSocket);
+        */
+        }
+
+        // Cancel an open connection and terminate the thread
+        public void cancel() {
+            try {
+                bluetoothSocket.close();
+            } catch (IOException e) {
+                e.printStackTrace();
+            }
+        }
     }
 }

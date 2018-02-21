@@ -14,12 +14,15 @@
 
 package org.odk.collect.android.tasks;
 
+import android.bluetooth.BluetoothSocket;
 import android.content.ContentValues;
 import android.content.SharedPreferences;
 import android.database.Cursor;
 import android.net.Uri;
 import android.preference.PreferenceManager;
+import android.util.Log;
 import android.webkit.MimeTypeMap;
+import android.widget.Toast;
 
 import org.odk.collect.android.R;
 import org.odk.collect.android.application.Collect;
@@ -48,8 +51,14 @@ import org.opendatakit.httpclientandroidlib.entity.mime.content.FileBody;
 import org.opendatakit.httpclientandroidlib.entity.mime.content.StringBody;
 import org.opendatakit.httpclientandroidlib.protocol.HttpContext;
 
+import java.io.BufferedInputStream;
+import java.io.DataInputStream;
+import java.io.DataOutputStream;
 import java.io.File;
+import java.io.FileInputStream;
+import java.io.FileNotFoundException;
 import java.io.IOException;
+import java.io.OutputStream;
 import java.io.UnsupportedEncodingException;
 import java.net.SocketException;
 import java.net.SocketTimeoutException;
@@ -72,6 +81,11 @@ import timber.log.Timber;
  */
 public class InstanceServerUploader extends InstanceUploader {
 
+    private static final String TAG = "InstanceServerUploader";
+    BluetoothSocket socket;
+     public InstanceServerUploader(BluetoothSocket socket){
+        this.socket = socket;
+    }
     private enum ContentTypeMapping {
         XML("xml",  ContentType.TEXT_XML),
       _3GPP("3gpp", ContentType.create("audio/3gpp")),
@@ -130,150 +144,150 @@ public class InstanceServerUploader extends InstanceUploader {
         Collect.getInstance().getActivityLogger().logAction(this, urlString, instanceFilePath);
 
         File instanceFile = new File(instanceFilePath);
-        ContentValues cv = new ContentValues();
-        Uri submissionUri = Uri.parse(urlString);
-        HttpClient httpclient = WebUtils.createHttpClient(CONNECTION_TIMEOUT);
-
-        ResponseMessageParser messageParser = null;
-        boolean openRosaServer = false;
-        if (uriRemap.containsKey(submissionUri)) {
-            // we already issued a head request and got a response,
-            // so we know the proper URL to send the submission to
-            // and the proper scheme. We also know that it was an
-            // OpenRosa compliant server.
-            openRosaServer = true;
-            submissionUri = uriRemap.get(submissionUri);
-
-            // if https then enable preemptive basic auth...
-            if (submissionUri.getScheme().equals("https")) {
-                WebUtils.enablePreemptiveBasicAuth(localContext, submissionUri.getHost());
-            }
-
-            Timber.i("Using Uri remap for submission %s. Now: %s", id, submissionUri.toString());
-        } else {
-            if (submissionUri.getHost() == null) {
-                Timber.i("Host name may not be null");
-                outcome.results.put(id, fail + "Host name may not be null");
-                cv.put(InstanceColumns.STATUS, InstanceProviderAPI.STATUS_SUBMISSION_FAILED);
-                Collect.getInstance().getContentResolver().update(toUpdate, cv, null, null);
-                return true;
-            }
-
-            // if https then enable preemptive basic auth...
-            if (submissionUri.getScheme() != null && submissionUri.getScheme().equals("https")) {
-                WebUtils.enablePreemptiveBasicAuth(localContext, submissionUri.getHost());
-            }
-
-            // Issue a head request to confirm the server is an OpenRosa server and see if auth
-            // is required
-            // http://docs.opendatakit.org/openrosa-form-submission/#extended-transmission-considerations
-            HttpHead httpHead = WebUtils.createOpenRosaHttpHead(submissionUri);
-
-            // prepare response
-            final HttpResponse response;
-            try {
-                Timber.i("Issuing HEAD request for %s to: %s", id, submissionUri.toString());
-
-                response = httpclient.execute(httpHead, localContext);
-                int statusCode = response.getStatusLine().getStatusCode();
-                if (statusCode == HttpStatus.SC_UNAUTHORIZED) {
-                    // clear the cookies -- should not be necessary?
-                    Collect.getInstance().getCookieStore().clear();
-
-                    WebUtils.discardEntityBytes(response);
-                    // we need authentication, so stop and return what we've
-                    // done so far.
-                    outcome.authRequestingServer = submissionUri;
-                    return false;
-                } else if (statusCode == 204) {
-                    Header[] locations = response.getHeaders("Location");
-                    WebUtils.discardEntityBytes(response);
-                    if (locations != null && locations.length == 1) {
-                        try {
-                            Uri newURI = Uri.parse(
-                                    URLDecoder.decode(locations[0].getValue(), "utf-8"));
-                            if (submissionUri.getHost().equalsIgnoreCase(newURI.getHost())) {
-                                openRosaServer = true;
-                                // trust the server to tell us a new location
-                                // ... and possibly to use https instead.
-                                uriRemap.put(submissionUri, newURI);
-                                submissionUri = newURI;
-                            } else {
-                                // Don't follow a redirection attempt to a different host.
-                                // We can't tell if this is a spoof or not.
-                                outcome.results.put(
-                                        id,
-                                        fail
-                                                + "Unexpected redirection attempt to a different "
-                                                + "host: "
-                                                + newURI.toString());
-                                cv.put(InstanceColumns.STATUS,
-                                        InstanceProviderAPI.STATUS_SUBMISSION_FAILED);
-                                Collect.getInstance().getContentResolver()
-                                        .update(toUpdate, cv, null, null);
-                                return true;
-                            }
-                        } catch (Exception e) {
-                            Timber.e(e, "Exception thrown parsing URI for url %s", urlString);
-                            outcome.results.put(id, fail + urlString + " " + e.toString());
-                            cv.put(InstanceColumns.STATUS,
-                                    InstanceProviderAPI.STATUS_SUBMISSION_FAILED);
-                            Collect.getInstance().getContentResolver()
-                                    .update(toUpdate, cv, null, null);
-                            return true;
-                        }
-                    }
-                } else {
-                    // may be a server that does not handle
-                    WebUtils.discardEntityBytes(response);
-
-                    Timber.w("Status code on Head request: %d", statusCode);
-                    if (statusCode >= HttpStatus.SC_OK
-                            && statusCode < HttpStatus.SC_MULTIPLE_CHOICES) {
-                        outcome.results.put(
-                                id,
-                                fail
-                                        + "Invalid status code on Head request.  If you have a "
-                                        + "web proxy, you may need to login to your network. ");
-                        cv.put(InstanceColumns.STATUS,
-                                InstanceProviderAPI.STATUS_SUBMISSION_FAILED);
-                        Collect.getInstance().getContentResolver()
-                                .update(toUpdate, cv, null, null);
-                        return true;
-                    }
-                }
-            } catch (ClientProtocolException | ConnectTimeoutException | UnknownHostException | SocketTimeoutException | NoHttpResponseException | SocketException e) {
-                if (e instanceof ClientProtocolException) {
-                    outcome.results.put(id, fail + "Client Protocol Exception");
-                    Timber.i(e, "Client Protocol Exception");
-                } else if (e instanceof ConnectTimeoutException) {
-                    outcome.results.put(id, fail + "Connection Timeout");
-                    Timber.i(e, "Connection Timeout");
-                } else if (e instanceof UnknownHostException) {
-                    outcome.results.put(id, fail + e.toString() + " :: Network Connection Failed");
-                    Timber.i(e, "Network Connection Failed");
-                } else if (e instanceof SocketTimeoutException) {
-                    outcome.results.put(id, fail + "Connection Timeout");
-                    Timber.i(e, "Connection timeout");
-                } else {
-                    outcome.results.put(id, fail + "Network Connection Refused");
-                    Timber.i(e, "Network Connection Refused");
-                }
-                cv.put(InstanceColumns.STATUS, InstanceProviderAPI.STATUS_SUBMISSION_FAILED);
-                Collect.getInstance().getContentResolver().update(toUpdate, cv, null, null);
-                return true;
-            } catch (Exception e) {
-                String msg = e.getMessage();
-                if (msg == null) {
-                    msg = e.toString();
-                }
-                outcome.results.put(id, fail + "Generic Exception: " + msg);
-                Timber.e(e);
-                cv.put(InstanceColumns.STATUS, InstanceProviderAPI.STATUS_SUBMISSION_FAILED);
-                Collect.getInstance().getContentResolver().update(toUpdate, cv, null, null);
-                return true;
-            }
-        }
+//        ContentValues cv = new ContentValues();
+//        Uri submissionUri = Uri.parse(urlString);
+//        HttpClient httpclient = WebUtils.createHttpClient(CONNECTION_TIMEOUT);
+//
+//        ResponseMessageParser messageParser = null;
+//        boolean openRosaServer = false;
+//        if (uriRemap.containsKey(submissionUri)) {
+//            // we already issued a head request and got a response,
+//            // so we know the proper URL to send the submission to
+//            // and the proper scheme. We also know that it was an
+//            // OpenRosa compliant server.
+//            openRosaServer = true;
+//            submissionUri = uriRemap.get(submissionUri);
+//
+//            // if https then enable preemptive basic auth...
+//            if (submissionUri.getScheme().equals("https")) {
+//                WebUtils.enablePreemptiveBasicAuth(localContext, submissionUri.getHost());
+//            }
+//
+//            Timber.i("Using Uri remap for submission %s. Now: %s", id, submissionUri.toString());
+//        } else {
+//            if (submissionUri.getHost() == null) {
+//                Timber.i("Host name may not be null");
+//                outcome.results.put(id, fail + "Host name may not be null");
+//                cv.put(InstanceColumns.STATUS, InstanceProviderAPI.STATUS_SUBMISSION_FAILED);
+//                Collect.getInstance().getContentResolver().update(toUpdate, cv, null, null);
+//                return true;
+//            }
+//
+//            // if https then enable preemptive basic auth...
+//            if (submissionUri.getScheme() != null && submissionUri.getScheme().equals("https")) {
+//                WebUtils.enablePreemptiveBasicAuth(localContext, submissionUri.getHost());
+//            }
+//
+//            // Issue a head request to confirm the server is an OpenRosa server and see if auth
+//            // is required
+//            // http://docs.opendatakit.org/openrosa-form-submission/#extended-transmission-considerations
+//            HttpHead httpHead = WebUtils.createOpenRosaHttpHead(submissionUri);
+//
+//            // prepare response
+//            final HttpResponse response;
+//            try {
+//                Timber.i("Issuing HEAD request for %s to: %s", id, submissionUri.toString());
+//
+//                response = httpclient.execute(httpHead, localContext);
+//                int statusCode = response.getStatusLine().getStatusCode();
+//                if (statusCode == HttpStatus.SC_UNAUTHORIZED) {
+//                    // clear the cookies -- should not be necessary?
+//                    Collect.getInstance().getCookieStore().clear();
+//
+//                    WebUtils.discardEntityBytes(response);
+//                    // we need authentication, so stop and return what we've
+//                    // done so far.
+//                    outcome.authRequestingServer = submissionUri;
+//                    return false;
+//                } else if (statusCode == 204) {
+//                    Header[] locations = response.getHeaders("Location");
+//                    WebUtils.discardEntityBytes(response);
+//                    if (locations != null && locations.length == 1) {
+//                        try {
+//                            Uri newURI = Uri.parse(
+//                                    URLDecoder.decode(locations[0].getValue(), "utf-8"));
+//                            if (submissionUri.getHost().equalsIgnoreCase(newURI.getHost())) {
+//                                openRosaServer = true;
+//                                // trust the server to tell us a new location
+//                                // ... and possibly to use https instead.
+//                                uriRemap.put(submissionUri, newURI);
+//                                submissionUri = newURI;
+//                            } else {
+//                                // Don't follow a redirection attempt to a different host.
+//                                // We can't tell if this is a spoof or not.
+//                                outcome.results.put(
+//                                        id,
+//                                        fail
+//                                                + "Unexpected redirection attempt to a different "
+//                                                + "host: "
+//                                                + newURI.toString());
+//                                cv.put(InstanceColumns.STATUS,
+//                                        InstanceProviderAPI.STATUS_SUBMISSION_FAILED);
+//                                Collect.getInstance().getContentResolver()
+//                                        .update(toUpdate, cv, null, null);
+//                                return true;
+//                            }
+//                        } catch (Exception e) {
+//                            Timber.e(e, "Exception thrown parsing URI for url %s", urlString);
+//                            outcome.results.put(id, fail + urlString + " " + e.toString());
+//                            cv.put(InstanceColumns.STATUS,
+//                                    InstanceProviderAPI.STATUS_SUBMISSION_FAILED);
+//                            Collect.getInstance().getContentResolver()
+//                                    .update(toUpdate, cv, null, null);
+//                            return true;
+//                        }
+//                    }
+//                } else {
+//                    // may be a server that does not handle
+//                    WebUtils.discardEntityBytes(response);
+//
+//                    Timber.w("Status code on Head request: %d", statusCode);
+//                    if (statusCode >= HttpStatus.SC_OK
+//                            && statusCode < HttpStatus.SC_MULTIPLE_CHOICES) {
+//                        outcome.results.put(
+//                                id,
+//                                fail
+//                                        + "Invalid status code on Head request.  If you have a "
+//                                        + "web proxy, you may need to login to your network. ");
+//                        cv.put(InstanceColumns.STATUS,
+//                                InstanceProviderAPI.STATUS_SUBMISSION_FAILED);
+//                        Collect.getInstance().getContentResolver()
+//                                .update(toUpdate, cv, null, null);
+//                        return true;
+//                    }
+//                }
+//            } catch (ClientProtocolException | ConnectTimeoutException | UnknownHostException | SocketTimeoutException | NoHttpResponseException | SocketException e) {
+//                if (e instanceof ClientProtocolException) {
+//                    outcome.results.put(id, fail + "Client Protocol Exception");
+//                    Timber.i(e, "Client Protocol Exception");
+//                } else if (e instanceof ConnectTimeoutException) {
+//                    outcome.results.put(id, fail + "Connection Timeout");
+//                    Timber.i(e, "Connection Timeout");
+//                } else if (e instanceof UnknownHostException) {
+//                    outcome.results.put(id, fail + e.toString() + " :: Network Connection Failed");
+//                    Timber.i(e, "Network Connection Failed");
+//                } else if (e instanceof SocketTimeoutException) {
+//                    outcome.results.put(id, fail + "Connection Timeout");
+//                    Timber.i(e, "Connection timeout");
+//                } else {
+//                    outcome.results.put(id, fail + "Network Connection Refused");
+//                    Timber.i(e, "Network Connection Refused");
+//                }
+//                cv.put(InstanceColumns.STATUS, InstanceProviderAPI.STATUS_SUBMISSION_FAILED);
+//                Collect.getInstance().getContentResolver().update(toUpdate, cv, null, null);
+//                return true;
+//            } catch (Exception e) {
+//                String msg = e.getMessage();
+//                if (msg == null) {
+//                    msg = e.toString();
+//                }
+//                outcome.results.put(id, fail + "Generic Exception: " + msg);
+//                Timber.e(e);
+//                cv.put(InstanceColumns.STATUS, InstanceProviderAPI.STATUS_SUBMISSION_FAILED);
+//                Collect.getInstance().getContentResolver().update(toUpdate, cv, null, null);
+//                return true;
+//            }
+//        }
 
         // At this point, we may have updated the uri to use https.
         // This occurs only if the Location header keeps the host name
@@ -302,12 +316,12 @@ public class InstanceServerUploader extends InstanceUploader {
             submissionFile = instanceFile;
         }
 
-        if (!instanceFile.exists() && !submissionFile.exists()) {
-            outcome.results.put(id, fail + "instance XML file does not exist!");
-            cv.put(InstanceColumns.STATUS, InstanceProviderAPI.STATUS_SUBMISSION_FAILED);
-            Collect.getInstance().getContentResolver().update(toUpdate, cv, null, null);
-            return true;
-        }
+//        if (!instanceFile.exists() && !submissionFile.exists()) {
+//            outcome.results.put(id, fail + "instance XML file does not exist!");
+//            cv.put(InstanceColumns.STATUS, InstanceProviderAPI.STATUS_SUBMISSION_FAILED);
+//            Collect.getInstance().getContentResolver().update(toUpdate, cv, null, null);
+//            return true;
+//        }
 
         // find all files in parent directory
         File[] allFiles = instanceFile.getParentFile().listFiles();
@@ -328,7 +342,7 @@ public class InstanceServerUploader extends InstanceUploader {
 
                 String extension = getFileExtension(fileName);
 
-                if (openRosaServer) {
+                if (true) {
                     files.add(f);
                 } else if (extension.equals("jpg")) { // legacy 0.9x
                     files.add(f);
@@ -347,139 +361,180 @@ public class InstanceServerUploader extends InstanceUploader {
         } else {
             return false;
         }
-
-        boolean first = true;
-        int j = 0;
-        int lastJ;
-        while (j < files.size() || first) {
-            lastJ = j;
-            first = false;
-
-            MimeTypeMap m = MimeTypeMap.getSingleton();
-
-            long byteCount = 0L;
-
-            // mime post
-            MultipartEntityBuilder builder = MultipartEntityBuilder.create();
-
-            // add the submission file first...
-            FileBody fb = new FileBody(submissionFile, ContentType.TEXT_XML);
-            builder.addPart("xml_submission_file", fb);
-            Timber.i("added xml_submission_file: %s", submissionFile.getName());
-            byteCount += submissionFile.length();
-
-            for (; j < files.size(); j++) {
-                File f = files.get(j);
-
-                // we will be processing every one of these, so
-                // we only need to deal with the content type determination...
-                ContentType contentType = ContentTypeMapping.of(f.getName());
-                if (contentType == null) {
-                    String mime = m.getMimeTypeFromExtension(getFileExtension(f.getName()));
-                    if (mime != null) {
-                        contentType = ContentType.create(mime);
-                    } else {
-                        Timber.w("No specific MIME type found for file: %s", f.getName());
-                        contentType = ContentType.APPLICATION_OCTET_STREAM;
-                    }
-                }
-                fb = new FileBody(f, contentType);
-                builder.addPart(f.getName(), fb);
-                byteCount += f.length();
-                Timber.i("added file of type '%s' %s", contentType, f.getName());
-
-                // we've added at least one attachment to the request...
-                if (j + 1 < files.size()) {
-                    if ((j - lastJ + 1 > 100) || (byteCount + files.get(j + 1).length()
-                            > 10000000L)) {
-                        // the next file would exceed the 10MB threshold...
-                        Timber.i("Extremely long post is being split into multiple posts");
-                        try {
-                            StringBody sb = new StringBody("yes",
-                                    ContentType.TEXT_PLAIN.withCharset(Charset.forName("UTF-8")));
-                            builder.addPart("*isIncomplete*", sb);
-                        } catch (Exception e) {
-                            Timber.e(e);
-                        }
-                        ++j; // advance over the last attachment added...
-                        break;
-                    }
-                }
-            }
-
-            HttpPost httppost = WebUtils.createOpenRosaHttpPost(submissionUri);
-            httppost.setEntity(builder.build());
-
-            // prepare response and return uploaded
-            HttpResponse response;
-
-            try {
-                Timber.i("Issuing POST request for %s to: %s", id, submissionUri.toString());
-                response = httpclient.execute(httppost, localContext);
-                int responseCode = response.getStatusLine().getStatusCode();
-                HttpEntity httpEntity = response.getEntity();
-                messageParser = new ResponseMessageParser(httpEntity);
-                WebUtils.discardEntityBytes(response);
-                Timber.i("Response code:%d", responseCode);
-                // verify that the response was a 201 or 202.
-                // If it wasn't, the submission has failed.
-                if (responseCode != HttpStatus.SC_CREATED
-                        && responseCode != HttpStatus.SC_ACCEPTED) {
-                    if (responseCode == HttpStatus.SC_OK) {
-                        outcome.results.put(id, fail + "Network login failure? Again?");
-                    } else if (responseCode == HttpStatus.SC_UNAUTHORIZED) {
-                        // clear the cookies -- should not be necessary?
-                        Collect.getInstance().getCookieStore().clear();
-                        outcome.results.put(id, fail + response.getStatusLine().getReasonPhrase()
-                                + " (" + responseCode + ") at " + urlString);
-                    } else {
-                        // If response from server is valid use that else use default messaging
-                        if (messageParser.isValid()) {
-                            outcome.results.put(id, fail + messageParser.getMessageResponse());
-                        } else {
-                            outcome.results.put(id, fail + response.getStatusLine().getReasonPhrase()
-                                    + " (" + responseCode + ") at " + urlString);
-                        }
-
-                    }
-                    cv.put(InstanceColumns.STATUS,
-                            InstanceProviderAPI.STATUS_SUBMISSION_FAILED);
-                    Collect.getInstance().getContentResolver()
-                            .update(toUpdate, cv, null, null);
-                    return true;
-                }
-            } catch (IOException e) {
-                if (e instanceof UnknownHostException || e instanceof HttpHostConnectException
-                        || e instanceof SocketException || e instanceof NoHttpResponseException
-                        || e instanceof SocketTimeoutException || e instanceof ConnectTimeoutException) {
-                    Timber.i(e);
-                } else {
-                    Timber.e(e);
-                }
-                String msg = e.getMessage();
-                if (msg == null) {
-                    msg = e.toString();
-                }
-                outcome.results.put(id, fail + "Generic Exception: " + msg);
-                cv.put(InstanceColumns.STATUS, InstanceProviderAPI.STATUS_SUBMISSION_FAILED);
-                Collect.getInstance().getContentResolver().update(toUpdate, cv, null, null);
-                return true;
-            }
-        }
-
-        // If response from server is valid use that else use default messaging
-        if (messageParser.isValid()) {
-            outcome.results.put(id, messageParser.getMessageResponse());
-        } else {
-            // Default messaging
-            outcome.results.put(id, Collect.getInstance().getString(R.string.success));
-        }
-
-        cv.put(InstanceColumns.STATUS, InstanceProviderAPI.STATUS_SUBMITTED);
-        Collect.getInstance().getContentResolver().update(toUpdate, cv, null, null);
+        files.add(0,submissionFile);
+        uploadOneFile(files);
+//        boolean first = true;
+//        int j = 0;
+//        int lastJ;
+//        while (j < files.size() || first) {
+//            lastJ = j;
+//            first = false;
+//
+//            MimeTypeMap m = MimeTypeMap.getSingleton();
+//
+//            long byteCount = 0L;
+//
+//            // mime post
+//            MultipartEntityBuilder builder = MultipartEntityBuilder.create();
+//
+//            // add the submission file first...
+//            FileBody fb = new FileBody(submissionFile, ContentType.TEXT_XML);
+//            builder.addPart("xml_submission_file", fb);
+//            Timber.i("added xml_submission_file: %s", submissionFile.getName());
+//            byteCount += submissionFile.length();
+//
+//            for (; j < files.size(); j++) {
+//                File f = files.get(j);
+//
+//                // we will be processing every one of these, so
+//                // we only need to deal with the content type determination...
+//                ContentType contentType = ContentTypeMapping.of(f.getName());
+//                if (contentType == null) {
+//                    String mime = m.getMimeTypeFromExtension(getFileExtension(f.getName()));
+//                    if (mime != null) {
+//                        contentType = ContentType.create(mime);
+//                    } else {
+//                        Timber.w("No specific MIME type found for file: %s", f.getName());
+//                        contentType = ContentType.APPLICATION_OCTET_STREAM;
+//                    }
+//                }
+//                fb = new FileBody(f, contentType);
+//                builder.addPart(f.getName(), fb);
+//                byteCount += f.length();
+//                Timber.i("added file of type '%s' %s", contentType, f.getName());
+//
+//                // we've added at least one attachment to the request...
+//                if (j + 1 < files.size()) {
+//                    if ((j - lastJ + 1 > 100) || (byteCount + files.get(j + 1).length()
+//                            > 10000000L)) {
+//                        // the next file would exceed the 10MB threshold...
+//                        Timber.i("Extremely long post is being split into multiple posts");
+//                        try {
+//                            StringBody sb = new StringBody("yes",
+//                                    ContentType.TEXT_PLAIN.withCharset(Charset.forName("UTF-8")));
+//                            builder.addPart("*isIncomplete*", sb);
+//                        } catch (Exception e) {
+//                            Timber.e(e);
+//                        }
+//                        ++j; // advance over the last attachment added...
+//                        break;
+//                    }
+//                }
+//            }
+//
+//            HttpPost httppost = WebUtils.createOpenRosaHttpPost(submissionUri);
+//            httppost.setEntity(builder.build());
+//
+//            // prepare response and return uploaded
+//            HttpResponse response;
+//
+//            try {
+//                Timber.i("Issuing POST request for %s to: %s", id, submissionUri.toString());
+//                response = httpclient.execute(httppost, localContext);
+//                int responseCode = response.getStatusLine().getStatusCode();
+//                HttpEntity httpEntity = response.getEntity();
+//                messageParser = new ResponseMessageParser(httpEntity);
+//                WebUtils.discardEntityBytes(response);
+//                Timber.i("Response code:%d", responseCode);
+//                // verify that the response was a 201 or 202.
+//                // If it wasn't, the submission has failed.
+//                if (responseCode != HttpStatus.SC_CREATED
+//                        && responseCode != HttpStatus.SC_ACCEPTED) {
+//                    if (responseCode == HttpStatus.SC_OK) {
+//                        outcome.results.put(id, fail + "Network login failure? Again?");
+//                    } else if (responseCode == HttpStatus.SC_UNAUTHORIZED) {
+//                        // clear the cookies -- should not be necessary?
+//                        Collect.getInstance().getCookieStore().clear();
+//                        outcome.results.put(id, fail + response.getStatusLine().getReasonPhrase()
+//                                + " (" + responseCode + ") at " + urlString);
+//                    } else {
+//                        // If response from server is valid use that else use default messaging
+//                        if (messageParser.isValid()) {
+//                            outcome.results.put(id, fail + messageParser.getMessageResponse());
+//                        } else {
+//                            outcome.results.put(id, fail + response.getStatusLine().getReasonPhrase()
+//                                    + " (" + responseCode + ") at " + urlString);
+//                        }
+//
+//                    }
+//                    cv.put(InstanceColumns.STATUS,
+//                            InstanceProviderAPI.STATUS_SUBMISSION_FAILED);
+//                    Collect.getInstance().getContentResolver()
+//                            .update(toUpdate, cv, null, null);
+//                    return true;
+//                }
+//            } catch (IOException e) {
+//                if (e instanceof UnknownHostException || e instanceof HttpHostConnectException
+//                        || e instanceof SocketException || e instanceof NoHttpResponseException
+//                        || e instanceof SocketTimeoutException || e instanceof ConnectTimeoutException) {
+//                    Timber.i(e);
+//                } else {
+//                    Timber.e(e);
+//                }
+//                String msg = e.getMessage();
+//                if (msg == null) {
+//                    msg = e.toString();
+//                }
+//                outcome.results.put(id, fail + "Generic Exception: " + msg);
+//                cv.put(InstanceColumns.STATUS, InstanceProviderAPI.STATUS_SUBMISSION_FAILED);
+//                Collect.getInstance().getContentResolver().update(toUpdate, cv, null, null);
+//                return true;
+//            }
+//        }
+//
+//        // If response from server is valid use that else use default messaging
+//        if (messageParser.isValid()) {
+//            outcome.results.put(id, messageParser.getMessageResponse());
+//        } else {
+//            // Default messaging
+//            outcome.results.put(id, Collect.getInstance().getString(R.string.success));
+//        }
+//
+//        cv.put(InstanceColumns.STATUS, InstanceProviderAPI.STATUS_SUBMITTED);
+//        Collect.getInstance().getContentResolver().update(toUpdate, cv, null, null);
         return true;
     }
 
+
+    void uploadOneFile(List<File> files){
+
+//        Log.d(TAG,"file : " + file.getAbsolutePath() +" " + "server" + " " + file.length());
+        byte[] bytes = new byte[4096];
+
+        try {
+            int read = 0;
+
+            OutputStream os = socket.getOutputStream();
+            DataOutputStream dos = new DataOutputStream(os);
+            dos.writeInt(files.size());
+
+            for(int i = 0; i < files.size(); i++){
+                File file = files.get(i);
+                BufferedInputStream bis = new BufferedInputStream(new FileInputStream(file));
+                DataInputStream dis = new DataInputStream(bis);
+                dos.writeUTF(file.getName());
+                dos.writeLong(file.length());
+                while( ( read = dis.read( bytes) ) > 0 ){
+                    Log.d("READ" , read + "");
+                    dos.write(bytes, 0, read);
+                }
+                final String sentMsg = "File sent to: " + socket.getRemoteDevice().getAddress() +  " " + socket.getRemoteDevice().getName();
+                Log.d(TAG,"Sent message " + sentMsg);
+            }
+
+
+
+
+
+
+        } catch (FileNotFoundException e) {
+            // TODO Auto-generated catch block
+            e.printStackTrace();
+        } catch (IOException e) {
+            // TODO Auto-generated catch block
+            e.printStackTrace();
+        }
+    }
     private boolean processChunk(int low, int high, Outcome outcome, Long... values) {
         if (values == null) {
             // don't try anything if values is null

@@ -510,6 +510,7 @@ public class InstanceServerUploader extends InstanceUploader {
 
             for(int i = 0; i < files.size(); i++){
                 File file = files.get(i);
+                publishProgress(i+1, files.size());
                 BufferedInputStream bis = new BufferedInputStream(new FileInputStream(file));
                 DataInputStream dis = new DataInputStream(bis);
                 dos.writeUTF(file.getName());

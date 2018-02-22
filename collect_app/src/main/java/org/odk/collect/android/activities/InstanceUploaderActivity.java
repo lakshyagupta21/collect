@@ -14,6 +14,7 @@
 
 package org.odk.collect.android.activities;
 
+import android.app.AlertDialog;
 import android.app.Dialog;
 import android.app.ProgressDialog;
 import android.bluetooth.BluetoothAdapter;
@@ -177,6 +178,7 @@ public class InstanceUploaderActivity extends CollectAbstractActivity implements
                             Log.d(TAG,"Already Paired");
                             BluetoothDevice bluetoothDevice = bdDevice;
                             // Initiate a connection request in a separate thread
+                            showDialog(PROGRESS_DIALOG);
                             ConnectingThread t = new ConnectingThread(bluetoothDevice);
                             t.start();
                             break;
@@ -321,7 +323,8 @@ public class InstanceUploaderActivity extends CollectAbstractActivity implements
         }
 
         if (!isInstanceStateSaved()) {
-            createUploadInstancesResultDialog(message.toString().trim());
+//            createUploadInstancesResultDialog(message.toString().trim());
+            createUploadInstancesResultDialog("Form Uploaded");
         } else {
             finish();
         }
@@ -337,7 +340,7 @@ public class InstanceUploaderActivity extends CollectAbstractActivity implements
     @Override
     public void progressUpdate(int progress, int total) {
         alertMsg = getString(R.string.sending_items, String.valueOf(progress), String.valueOf(total));
-//        progressDialog.setMessage(alertMsg);
+        progressDialog.setMessage(alertMsg);
     }
 
     @Override
@@ -348,24 +351,24 @@ public class InstanceUploaderActivity extends CollectAbstractActivity implements
                         "onCreateDialog.PROGRESS_DIALOG", "show");
 
                 progressDialog = new ProgressDialog(this);
-                DialogInterface.OnClickListener loadingButtonListener =
-                        new DialogInterface.OnClickListener() {
-                            @Override
-                            public void onClick(DialogInterface dialog, int which) {
-                                Collect.getInstance().getActivityLogger().logAction(this,
-                                        "onCreateDialog.PROGRESS_DIALOG", "cancel");
-                                dialog.dismiss();
-                                instanceServerUploader.cancel(true);
-                                instanceServerUploader.setUploaderListener(null);
-                                finish();
-                            }
-                        };
+//                DialogInterface.OnClickListener loadingButtonListener =
+//                        new DialogInterface.OnClickListener() {
+//                            @Override
+//                            public void onClick(DialogInterface dialog, int which) {
+//                                Collect.getInstance().getActivityLogger().logAction(this,
+//                                        "onCreateDialog.PROGRESS_DIALOG", "cancel");
+//                                dialog.dismiss();
+//                                instanceServerUploader.cancel(true);
+//                                instanceServerUploader.setUploaderListener(null);
+//                                finish();
+//                            }
+//                        };
                 progressDialog.setTitle(getString(R.string.uploading_data));
                 progressDialog.setMessage(alertMsg);
                 progressDialog.setIndeterminate(true);
                 progressDialog.setProgressStyle(ProgressDialog.STYLE_SPINNER);
                 progressDialog.setCancelable(false);
-                progressDialog.setButton(getString(R.string.cancel), loadingButtonListener);
+                //progressDialog.setButton(getString(R.string.cancel), loadingButtonListener);
                 return progressDialog;
             case AUTH_DIALOG:
                 Timber.i("onCreateDialog(AUTH_DIALOG): for upload of %d instances!",
@@ -560,6 +563,7 @@ public class InstanceUploaderActivity extends CollectAbstractActivity implements
                 }
             } catch (IOException connectException) {
                 connectException.printStackTrace();
+
                 try {
                     bluetoothSocket.close();
                 } catch (IOException e) {

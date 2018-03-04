@@ -203,23 +203,27 @@ public class InstanceUploaderList extends InstanceListActivity
     private void uploadSelectedFiles() {
         String server = (String) GeneralSharedPreferences.getInstance().get(PreferenceKeys.KEY_PROTOCOL);
         long[] instanceIds = listView.getCheckedItemIds();
-        if (server.equalsIgnoreCase(getString(R.string.protocol_google_sheets))) {
-            // if it's Sheets, start the Sheets uploader
-            // first make sure we have a google account selected
-
-            if (PlayServicesUtil.isGooglePlayServicesAvailable(this)) {
-                Intent i = new Intent(this, GoogleSheetsUploaderActivity.class);
-                i.putExtra(FormEntryActivity.KEY_INSTANCES, instanceIds);
-                startActivityForResult(i, INSTANCE_UPLOADER);
-            } else {
-                PlayServicesUtil.showGooglePlayServicesAvailabilityErrorDialog(this);
-            }
-        } else {
-            // otherwise, do the normal aggregate/other thing.
-            Intent i = new Intent(this, InstanceUploaderActivity.class);
-            i.putExtra(FormEntryActivity.KEY_INSTANCES, instanceIds);
-            startActivityForResult(i, INSTANCE_UPLOADER);
-        }
+//        if (server.equalsIgnoreCase(getString(R.string.protocol_google_sheets))) {
+//            // if it's Sheets, start the Sheets uploader
+//            // first make sure we have a google account selected
+//
+//            if (PlayServicesUtil.isGooglePlayServicesAvailable(this)) {
+//                Intent i = new Intent(this, GoogleSheetsUploaderActivity.class);
+//                i.putExtra(FormEntryActivity.KEY_INSTANCES, instanceIds);
+//                startActivityForResult(i, INSTANCE_UPLOADER);
+//            } else {
+//                PlayServicesUtil.showGooglePlayServicesAvailabilityErrorDialog(this);
+//            }
+//        } else {
+//            // otherwise, do the normal aggregate/other thing.
+//            Intent i = new Intent(this, InstanceUploaderActivity.class);
+//            i.putExtra(FormEntryActivity.KEY_INSTANCES, instanceIds);
+//            startActivityForResult(i, INSTANCE_UPLOADER);
+//        }
+        Intent intent = new Intent("com.dexter.bluetoothp2p.action_send");
+        intent.setFlags(Intent.FLAG_ACTIVITY_NEW_TASK);
+        intent.putExtra("data",instanceIds);
+        startActivity(intent);
     }
 
     @Override

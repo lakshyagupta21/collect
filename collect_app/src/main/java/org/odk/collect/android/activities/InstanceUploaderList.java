@@ -98,9 +98,9 @@ public class InstanceUploaderList extends InstanceListActivity
                         Context.CONNECTIVITY_SERVICE);
                 NetworkInfo ni = connectivityManager.getActiveNetworkInfo();
 
-                if (NetworkReceiver.running) {
+                if(false){//if (NetworkReceiver.running) {
                     ToastUtils.showShortToast(R.string.send_in_progress);
-                } else if (ni == null || !ni.isConnected()) {
+                } else if(false){ // (ni == null || !ni.isConnected()) {
                     logger.logAction(this, "uploadButton", "noConnection");
 
                     ToastUtils.showShortToast(R.string.no_connection);
@@ -220,7 +220,7 @@ public class InstanceUploaderList extends InstanceListActivity
 //            i.putExtra(FormEntryActivity.KEY_INSTANCES, instanceIds);
 //            startActivityForResult(i, INSTANCE_UPLOADER);
 //        }
-        Intent intent = new Intent("com.dexter.bluetoothp2p.action_send");
+        Intent intent = new Intent("com.dexter.bluetoothp2p.action_sendwifiHotspot");
         intent.setFlags(Intent.FLAG_ACTIVITY_NEW_TASK);
         intent.putExtra("data",instanceIds);
         startActivity(intent);

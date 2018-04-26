@@ -86,6 +86,7 @@ public class GoogleDriveActivity extends FormListActivity implements View.OnClic
     private static final String FILE_LIST_KEY = "fileList";
     private static final String PARENT_ID_KEY = "parentId";
     private static final String CURRENT_ID_KEY = "currentDir";
+    private ProgressDialog progressDialog;
     private Button rootButton;
     private Button backButton;
     private Button downloadButton;
@@ -117,7 +118,7 @@ public class GoogleDriveActivity extends FormListActivity implements View.OnClic
         super.onCreate(savedInstanceState);
         setContentView(R.layout.drive_layout);
 
-        setProgressBarVisibility(true);
+        alertMsg = getString(R.string.please_wait);
         initToolbar();
 
         parentId = null;
@@ -220,6 +221,10 @@ public class GoogleDriveActivity extends FormListActivity implements View.OnClic
             accountsManager.chooseAccount();
         } else {
             if (isDeviceOnline()) {
+                if (progressDialog != null) {
+                    progressDialog.setMessage(getString(R.string.please_wait));
+                }
+                showDialog(PROGRESS_DIALOG);
                 toDownload.clear();
                 filteredList.clear();
                 driveList.clear();
@@ -280,6 +285,7 @@ public class GoogleDriveActivity extends FormListActivity implements View.OnClic
         }
 
         alertMsg = getString(R.string.drive_get_file, messageBuilder.toString());
+        progressDialog.setMessage(alertMsg);
         showDialog(PROGRESS_DIALOG);
 
         getFileTask = new GetFileTask();
@@ -351,7 +357,7 @@ public class GoogleDriveActivity extends FormListActivity implements View.OnClic
                 Collect.getInstance().getActivityLogger()
                         .logAction(this, "onCreateDialog.PROGRESS_DIALOG", "show");
 
-                ProgressDialog progressDialog = new ProgressDialog(this);
+                progressDialog = new ProgressDialog(this);
                 DialogInterface.OnClickListener loadingButtonListener =
                         new DialogInterface.OnClickListener() {
                             @Override
@@ -360,8 +366,16 @@ public class GoogleDriveActivity extends FormListActivity implements View.OnClic
                                         .logAction(this, "onCreateDialog.PROGRESS_DIALOG",
                                                 "cancel");
                                 dialog.dismiss();
-                                getFileTask.cancel(true);
-                                getFileTask.setGoogleDriveFormDownloadListener(null);
+
+                                if (getFileTask != null) {
+                                    getFileTask.cancel(true);
+                                    getFileTask.setGoogleDriveFormDownloadListener(null);
+                                }
+
+                                if(retrieveDriveFileContentsAsyncTask != null) {
+                                    retrieveDriveFileContentsAsyncTask.cancel(true);
+                                    retrieveDriveFileContentsAsyncTask.setTaskListener(null);
+                                }
                             }
                         };
                 progressDialog.setTitle(getString(R.string.downloading_data));
@@ -458,7 +472,7 @@ public class GoogleDriveActivity extends FormListActivity implements View.OnClic
     public void taskComplete(HashMap<String, Object> results) {
         rootButton.setEnabled(true);
         downloadButton.setEnabled(toDownload.size() > 0);
-        setProgressBarIndeterminateVisibility(false);
+        dismissDialog(PROGRESS_DIALOG);
 
         if (results == null) {
             // if results was null, then got a google exception
@@ -547,7 +561,11 @@ public class GoogleDriveActivity extends FormListActivity implements View.OnClic
     }
 
     public void listFiles(String dir, String query) {
-        setProgressBarIndeterminateVisibility(true);
+        if (progressDialog != null) {
+            progressDialog.setMessage(getString(R.string.please_wait));
+        }
+        showDialog(PROGRESS_DIALOG);
+
         adapter = null;
         retrieveDriveFileContentsAsyncTask = new RetrieveDriveFileContentsAsyncTask();
         retrieveDriveFileContentsAsyncTask.setTaskListener(this);

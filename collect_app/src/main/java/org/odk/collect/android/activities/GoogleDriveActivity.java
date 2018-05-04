@@ -114,7 +114,6 @@ public class GoogleDriveActivity extends FormListActivity implements View.OnClic
 
     @Override
     public void onCreate(Bundle savedInstanceState) {
-        requestWindowFeature(Window.FEATURE_INDETERMINATE_PROGRESS);
         super.onCreate(savedInstanceState);
         setContentView(R.layout.drive_layout);
 
@@ -153,18 +152,27 @@ public class GoogleDriveActivity extends FormListActivity implements View.OnClic
         if (getLastCustomNonConfigurationInstance() instanceof RetrieveDriveFileContentsAsyncTask) {
             retrieveDriveFileContentsAsyncTask =
                     (RetrieveDriveFileContentsAsyncTask) getLastNonConfigurationInstance();
-            setProgressBarIndeterminateVisibility(true);
+            if (retrieveDriveFileContentsAsyncTask != null) {
+                retrieveDriveFileContentsAsyncTask.setTaskListener(this);
+                if (retrieveDriveFileContentsAsyncTask.getStatus() == AsyncTask.Status.FINISHED) {
+                    try {
+                        dismissDialog(PROGRESS_DIALOG);
+                    } catch (Exception e) {
+                        Timber.i("Exception was thrown while dismissing a dialog.");
+                    }
+                }
+            }
         } else {
             getFileTask = (GetFileTask) getLastNonConfigurationInstance();
             if (getFileTask != null) {
                 getFileTask.setGoogleDriveFormDownloadListener(this);
-            }
-        }
-        if (getFileTask != null && getFileTask.getStatus() == AsyncTask.Status.FINISHED) {
-            try {
-                dismissDialog(PROGRESS_DIALOG);
-            } catch (Exception e) {
-                Timber.i("Exception was thrown while dismissing a dialog.");
+                if (getFileTask.getStatus() == AsyncTask.Status.FINISHED) {
+                    try {
+                        dismissDialog(PROGRESS_DIALOG);
+                    } catch (Exception e) {
+                        Timber.i("Exception was thrown while dismissing a dialog.");
+                    }
+                }
             }
         }
         if (alertShowing) {
@@ -507,12 +515,6 @@ public class GoogleDriveActivity extends FormListActivity implements View.OnClic
 
     @Override
     protected void onPause() {
-        if (retrieveDriveFileContentsAsyncTask != null) {
-            retrieveDriveFileContentsAsyncTask.setTaskListener(null);
-        }
-        if (getFileTask != null) {
-            getFileTask.setGoogleDriveFormDownloadListener(null);
-        }
         super.onPause();
     }
 
